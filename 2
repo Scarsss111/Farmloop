@@ -822,36 +822,52 @@ local FarmTeleportService = game:GetService("TeleportService")
 local FarmHttpService = game:GetService("HttpService")
 local FarmHttpRequest = (syn and syn.request) or (http and http.request) or (request) or (httprequest)
 
+--=== SERVERHOP FUNCTION (with retry) ===--
 local function Farm_ServerHop()
     local PlaceId = game.PlaceId
     local JobId = game.JobId
-    local url = string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Desc&limit=100", PlaceId)
-    local response = FarmHttpRequest({Url = url, Method = "GET"})
-    if not response or not response.Body then
-        warn("Failed to get server list for serverhop!")
-        return
-    end
-    local data = FarmHttpService:JSONDecode(response.Body)
-    local servers = {}
-    if data and data.data then
+
+    while true do
+        local url = string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Desc&limit=100", PlaceId)
+        local response = FarmHttpRequest({Url = url, Method = "GET"})
+        if not response or not response.Body then
+            warn("Serverhop: Failed to get server list, retrying...")
+            task.wait(3)
+            continue
+        end
+
+        local success, data = pcall(function()
+            return FarmHttpService:JSONDecode(response.Body)
+        end)
+        if not success or not data or not data.data then
+            warn("Serverhop: JSON decode failed, retrying...")
+            task.wait(3)
+            continue
+        end
+
+        local servers = {}
         for _, v in next, data.data do
-            if type(v) == "table" and tonumber(v.playing) and tonumber(v.maxPlayers) 
+            if type(v) == "table" and tonumber(v.playing) and tonumber(v.maxPlayers)
             and v.playing < v.maxPlayers and v.id ~= JobId then
                 table.insert(servers, 1, v.id)
             end
         end
-    end
-    if #servers > 0 then
-        local queuedsrc = ('loadstring(game:HttpGet("%s"))()'):format(GITHUB_SCRIPT_URL)
-        if queue_on_teleport then
-            queue_on_teleport(queuedsrc)
-        elseif syn and syn.queue_on_teleport then
-            syn.queue_on_teleport(queuedsrc)
+
+        if #servers > 0 then
+            local queuedsrc = ('loadstring(game:HttpGet("%s"))()'):format(GITHUB_SCRIPT_URL)
+            if queue_on_teleport then
+                queue_on_teleport(queuedsrc)
+            elseif syn and syn.queue_on_teleport then
+                syn.queue_on_teleport(queuedsrc)
+            end
+
+            local chosenServer = servers[math.random(1, #servers)]
+            FarmTeleportService:TeleportToPlaceInstance(PlaceId, chosenServer, FarmPlayers.LocalPlayer)
+            return -- only exits when teleport is fired
+        else
+            warn("Serverhop: No valid servers, retrying...")
+            task.wait(3)
         end
-        local chosenServer = servers[math.random(1, #servers)]
-        FarmTeleportService:TeleportToPlaceInstance(PlaceId, chosenServer, FarmPlayers.LocalPlayer)
-    else
-        warn("Serverhop: Couldn't find a valid server.")
     end
 end
 
@@ -899,7 +915,7 @@ local function Farm_AutoFarmLoop()
             end
         end
 
-        -- Serverhop
+        -- Serverhop (retry until success)
         if AutoOnorOff then AutoOnorOff.Text = "Serverhopping..." end
         Farm_ServerHop()
         return -- script will reload on new server
@@ -943,6 +959,7 @@ if AutoOnorOff then
 end
 Farm_AutoThread = coroutine.create(Farm_AutoFarmLoop)
 coroutine.resume(Farm_AutoThread)
+
 
 
 
