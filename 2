@@ -822,7 +822,7 @@ local FarmTeleportService = game:GetService("TeleportService")
 local FarmHttpService = game:GetService("HttpService")
 local FarmHttpRequest = (syn and syn.request) or (http and http.request) or (request) or (httprequest)
 
---=== SERVERHOP FUNCTION (with retry) ===--
+--=== SERVERHOP FUNCTION (lowest player server, retry if fails) ===--
 local function Farm_ServerHop()
     local PlaceId = game.PlaceId
     local JobId = game.JobId
@@ -849,21 +849,40 @@ local function Farm_ServerHop()
         for _, v in next, data.data do
             if type(v) == "table" and tonumber(v.playing) and tonumber(v.maxPlayers)
             and v.playing < v.maxPlayers and v.id ~= JobId then
-                table.insert(servers, 1, v.id)
+                table.insert(servers, {id = v.id, playing = v.playing})
             end
         end
 
         if #servers > 0 then
-            local queuedsrc = ('loadstring(game:HttpGet("%s"))()'):format(GITHUB_SCRIPT_URL)
-            if queue_on_teleport then
-                queue_on_teleport(queuedsrc)
-            elseif syn and syn.queue_on_teleport then
-                syn.queue_on_teleport(queuedsrc)
-            end
+            -- Sort by lowest number of players first
+            table.sort(servers, function(a, b)
+                return a.playing < b.playing
+            end)
 
-            local chosenServer = servers[math.random(1, #servers)]
-            FarmTeleportService:TeleportToPlaceInstance(PlaceId, chosenServer, FarmPlayers.LocalPlayer)
-            return -- only exits when teleport is fired
+            local queuedsrc = ('loadstring(game:HttpGet("%s"))()'):format(GITHUB_SCRIPT_URL)
+
+            for _, server in ipairs(servers) do
+                -- Queue script for next server
+                if queue_on_teleport then
+                    queue_on_teleport(queuedsrc)
+                elseif syn and syn.queue_on_teleport then
+                    syn.queue_on_teleport(queuedsrc)
+                end
+
+                -- Attempt teleport
+                local success, err = pcall(function()
+                    FarmTeleportService:TeleportToPlaceInstance(PlaceId, server.id, FarmPlayers.LocalPlayer)
+                end)
+                if success then
+                    return -- teleport fired successfully
+                else
+                    warn("Serverhop: Teleport failed to server "..server.id..", trying next...")
+                    task.wait(1)
+                end
+            end
+            -- If none worked, wait before retrying
+            warn("Serverhop: All servers failed, retrying...")
+            task.wait(3)
         else
             warn("Serverhop: No valid servers, retrying...")
             task.wait(3)
@@ -915,7 +934,7 @@ local function Farm_AutoFarmLoop()
             end
         end
 
-        -- Serverhop (retry until success)
+        -- Serverhop (lowest player, retry if fails)
         if AutoOnorOff then AutoOnorOff.Text = "Serverhopping..." end
         Farm_ServerHop()
         return -- script will reload on new server
@@ -959,6 +978,7 @@ if AutoOnorOff then
 end
 Farm_AutoThread = coroutine.create(Farm_AutoFarmLoop)
 coroutine.resume(Farm_AutoThread)
+-- NEW ONE HERE
 
 
 
